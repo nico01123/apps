@@ -918,6 +918,7 @@ function shutSmooth(M, known, pinned) {
   /* backend: Apps Script web app address and its shared token (see Code.gs); empty = fall back to the Google Form */
   window.__ENDPOINT = 'https://script.google.com/macros/s/AKfycbw8WR3cwoKAg2x9s6kOFbNcdhN-i0Nyk09b0TGa_NRcmpCgDdNpYn75YXNfpcdWY_XMYg/exec', window.__TOKEN = 'letzi-Wgd1XrEKKcAAWO';
   window.__ROUND = ROUND;
+  window.__DESIGNS = PRESETS.filter(function (q) { return q.id !== 'mine' && (!SUBSET || SUBSET.indexOf(q.id) >= 0); }).map(function (q) { return [q.id, q.name]; });
   PRESETS = PRESETS.filter(function (q) { return q.id !== 'mine' && (!SUBSET || SUBSET.indexOf(q.id) >= 0); });
   var SPECS = JSON.parse(JSON.stringify(PRESETS));
 
@@ -2200,7 +2201,30 @@ var TEE = (function () {
   /* the panel is built once per design; later updates only change text and attributes, so a tap is never lost to a rebuild */
   var curName = '', FORM = 'https://docs.google.com/forms/d/e/1FAIpQLSeLNXwzqfGpfa0tGoAxWLxLM6cVnGyA5xUgzpmXO9je2UZ_lA/viewform?usp=pp_url&entry.599897637=';
   function formHref() { return FORM + encodeURIComponent(curName || curId) + '&entry.218251075=' + encodeURIComponent(window.__ROUND || ''); }
-  var fv = {}, ft = {}, sending = false;
+  var fv = {}, ft = {}, sending = false, loadedFor = '', rated = {};
+  function ratedNote() {
+    if (!els.hist) return;
+    var n = Object.keys(rated).length, tot = (window.__DESIGNS || []).length;
+    els.hist.textContent = n ? 'Rated ' + n + ' of ' + tot + ' designs so far.' + (rated[curId] ? ' Your earlier rating of this design is loaded; submit again to change it.' : '') : '';
+  }
+  function loadMine() {
+    var nm = els.fname ? els.fname.value.trim() : '';
+    if (!window.__ENDPOINT || !/^\S+(\s+\S+)+$/.test(nm) || loadedFor === nm.toLowerCase()) return;
+    loadedFor = nm.toLowerCase();
+    fetch(window.__ENDPOINT + '?token=' + encodeURIComponent(window.__TOKEN) + '&round=' + encodeURIComponent(window.__ROUND) + '&name=' + encodeURIComponent(nm))
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (!j.ok || loadedFor !== (els.fname.value.trim().toLowerCase())) return;
+        rated = {};
+        (window.__DESIGNS || []).forEach(function (d) {
+          var v = j.votes[d[1]]; if (!v) return;
+          rated[d[0]] = true; fv[d[0]] = v.score; ft[d[0]] = v.comment;
+        });
+        setLinks(); ratedNote();
+      })
+      .catch(function () { loadedFor = ''; });
+  }
+  var loadTimer = 0;
   function setLinks() {
     if (!els.fgo) return;
     var v = fv[curId], t = ft[curId] || '';
@@ -2225,7 +2249,8 @@ var TEE = (function () {
     fb.appendChild(el('h4', null, 'Your score'));
     if (!db) { fb.appendChild(el('p', 'none', 'Enter your first and last name, pick a score and write a comment, then press Submit rating. Your answer is sent to the club.'));
       els.fname = el('input'); els.fname.type = 'text'; els.fname.placeholder = 'First and last name (required)'; els.fname.maxLength = 60; els.fname.required = true; els.fname.setAttribute('aria-label', 'Your name'); els.fname.value = store.get('bcl-name') || '';
-      els.fname.addEventListener('input', function () { store.set('bcl-name', els.fname.value); setLinks(); });
+      els.fname.addEventListener('input', function () { store.set('bcl-name', els.fname.value); setLinks(); clearTimeout(loadTimer); loadTimer = setTimeout(loadMine, 700); });
+      els.fname.addEventListener('blur', loadMine);
       fb.appendChild(els.fname);
       var sc0 = el('div', 'scale'); els.links = [];
       for (var j = 1; j <= 10; j++) (function (v) { var q = el('button', null, String(v)); q.type = 'button'; q.addEventListener('click', function () { fv[curId] = v; setLinks(); }); els.links.push(q); sc0.appendChild(q); })(j);
@@ -2242,11 +2267,12 @@ var TEE = (function () {
         sending = true; els.note.textContent = ''; setLinks();
         fetch(window.__ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ token: window.__TOKEN, round: window.__ROUND, design: curName || id, name: nm, score: fv[id], comment: ft[id] || '' }) })
           .then(function (r) { return r.json(); })
-          .then(function (j) { if (!j.ok) throw new Error(j.error); sending = false; els.note.textContent = 'Thanks, your rating for ' + (curName || id) + ' is saved. Pick another design to rate more.'; setLinks(); })
+          .then(function (j) { if (!j.ok) throw new Error(j.error); sending = false; rated[id] = true; ratedNote(); els.note.textContent = 'Thanks, your rating for ' + (curName || id) + ' is saved. Pick another design to rate more.'; setLinks(); })
           .catch(function (er) { sending = false; els.note.textContent = 'Could not save (' + ((er && er.message) || 'network') + '). Please try again.'; setLinks(); });
       });
       fb.appendChild(els.fgo);
       els.note = el('small', null, window.__ENDPOINT ? '' : 'Submitting opens a confirmation page from Google. Close that tab to come back.'); els.note.setAttribute('role', 'status'); fb.appendChild(els.note);
+      els.hist = el('small'); fb.appendChild(els.hist); setTimeout(loadMine, 0);
       setLinks(); return; }
     var a = el('div', 'avg'); els.avgNum = el('b'); els.avgTxt = el('span'); a.appendChild(els.avgNum); a.appendChild(els.avgTxt); fb.appendChild(a);
     var sc = el('div', 'scale'); sc.setAttribute('role', 'group'); sc.setAttribute('aria-label', 'Your rating from 1 to 10'); els.btns = [];
@@ -2336,7 +2362,7 @@ var TEE = (function () {
     curName = name || id;
     var l = document.querySelector('.formlink'); if (l) l.href = formHref();
     if (id !== curId) { curId = id; okMsg = ''; errMsg = ''; paint(); }
-    setLinks();
+    setLinks(); ratedNote();
   };
 
   (async function () {
