@@ -2201,7 +2201,12 @@ var TEE = (function () {
   /* the panel is built once per design; later updates only change text and attributes, so a tap is never lost to a rebuild */
   var curName = '', FORM = 'https://docs.google.com/forms/d/e/1FAIpQLSeLNXwzqfGpfa0tGoAxWLxLM6cVnGyA5xUgzpmXO9je2UZ_lA/viewform?usp=pp_url&entry.599897637=';
   function formHref() { return FORM + encodeURIComponent(curName || curId) + '&entry.218251075=' + encodeURIComponent(window.__ROUND || ''); }
-  var fv = {}, ft = {}, sending = false, loadedFor = '', rated = {};
+  var fv = {}, ft = {}, sending = false, loadedFor = '', rated = {}, autoV = {}, autoT = {};
+  /* values filled from the sheet (not typed or picked by hand) are dropped when the name changes */
+  function clearLoaded() {
+    Object.keys(autoV).forEach(function (k) { if (autoV[k]) delete fv[k]; }); Object.keys(autoT).forEach(function (k) { if (autoT[k]) delete ft[k]; });
+    autoV = {}; autoT = {}; rated = {}; loadedFor = '';
+  }
   function ratedNote() {
     if (!els.hist) return;
     var n = Object.keys(rated).length, tot = (window.__DESIGNS || []).length;
@@ -2210,7 +2215,7 @@ var TEE = (function () {
   function loadMine() {
     var nm = els.fname ? els.fname.value.trim() : '';
     if (!window.__ENDPOINT || !/^\S+(\s+\S+)+$/.test(nm) || loadedFor === nm.toLowerCase()) return;
-    loadedFor = nm.toLowerCase();
+    clearLoaded(); loadedFor = nm.toLowerCase();
     fetch(window.__ENDPOINT + '?token=' + encodeURIComponent(window.__TOKEN) + '&round=' + encodeURIComponent(window.__ROUND) + '&name=' + encodeURIComponent(nm))
       .then(function (r) { return r.json(); })
       .then(function (j) {
@@ -2218,7 +2223,9 @@ var TEE = (function () {
         rated = {};
         (window.__DESIGNS || []).forEach(function (d) {
           var v = j.votes[d[1]]; if (!v) return;
-          rated[d[0]] = true; fv[d[0]] = v.score; ft[d[0]] = v.comment;
+          rated[d[0]] = true;
+          if (fv[d[0]] === undefined || autoV[d[0]]) { fv[d[0]] = v.score; autoV[d[0]] = true; }
+          if (!ft[d[0]] || autoT[d[0]]) { ft[d[0]] = v.comment; autoT[d[0]] = true; }
         });
         setLinks(); ratedNote();
       })
@@ -2249,13 +2256,13 @@ var TEE = (function () {
     fb.appendChild(el('h4', null, 'Your score'));
     if (!db) { fb.appendChild(el('p', 'none', 'Enter your first and last name, pick a score and write a comment, then press Submit rating. Your answer is sent to the club.'));
       els.fname = el('input'); els.fname.type = 'text'; els.fname.placeholder = 'First and last name (required)'; els.fname.maxLength = 60; els.fname.required = true; els.fname.setAttribute('aria-label', 'Your name'); els.fname.value = store.get('bcl-name') || '';
-      els.fname.addEventListener('input', function () { store.set('bcl-name', els.fname.value); setLinks(); clearTimeout(loadTimer); loadTimer = setTimeout(loadMine, 700); });
+      els.fname.addEventListener('input', function () { store.set('bcl-name', els.fname.value); if (els.fname.value.trim().toLowerCase() !== loadedFor) { clearLoaded(); ratedNote(); } setLinks(); clearTimeout(loadTimer); loadTimer = setTimeout(loadMine, 700); });
       els.fname.addEventListener('blur', loadMine);
       fb.appendChild(els.fname);
       var sc0 = el('div', 'scale'); els.links = [];
-      for (var j = 1; j <= 10; j++) (function (v) { var q = el('button', null, String(v)); q.type = 'button'; q.addEventListener('click', function () { fv[curId] = v; setLinks(); }); els.links.push(q); sc0.appendChild(q); })(j);
+      for (var j = 1; j <= 10; j++) (function (v) { var q = el('button', null, String(v)); q.type = 'button'; q.addEventListener('click', function () { fv[curId] = v; autoV[curId] = false; setLinks(); }); els.links.push(q); sc0.appendChild(q); })(j);
       fb.appendChild(sc0);
-      els.ftext = el('textarea'); els.ftext.placeholder = 'Comment (optional)'; els.ftext.maxLength = 600; els.ftext.addEventListener('input', function () { ft[curId] = els.ftext.value; setLinks(); });
+      els.ftext = el('textarea'); els.ftext.placeholder = 'Comment (optional)'; els.ftext.maxLength = 600; els.ftext.addEventListener('input', function () { ft[curId] = els.ftext.value; autoT[curId] = false; setLinks(); });
       fb.appendChild(els.ftext);
       els.fgo = el('a', 'post', 'Submit rating'); if (!window.__ENDPOINT) { els.fgo.target = '_blank'; els.fgo.rel = 'noopener'; }
       els.fgo.style.display = 'block'; els.fgo.style.textAlign = 'center'; els.fgo.style.textDecoration = 'none'; els.fgo.style.padding = '12px 14px';
@@ -2267,7 +2274,7 @@ var TEE = (function () {
         sending = true; els.note.textContent = ''; setLinks();
         fetch(window.__ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ token: window.__TOKEN, round: window.__ROUND, design: curName || id, name: nm, score: fv[id], comment: ft[id] || '' }) })
           .then(function (r) { return r.json(); })
-          .then(function (j) { if (!j.ok) throw new Error(j.error); sending = false; rated[id] = true; ratedNote(); els.note.textContent = 'Thanks, your rating for ' + (curName || id) + ' is saved. Pick another design to rate more.'; setLinks(); })
+          .then(function (j) { if (!j.ok) throw new Error(j.error); sending = false; rated[id] = true; autoV[id] = true; autoT[id] = true; ratedNote(); els.note.textContent = 'Thanks, your rating for ' + (curName || id) + ' is saved. Pick another design to rate more.'; setLinks(); })
           .catch(function (er) { sending = false; els.note.textContent = 'Could not save (' + ((er && er.message) || 'network') + '). Please try again.'; setLinks(); });
       });
       fb.appendChild(els.fgo);
