@@ -1784,8 +1784,9 @@ var TEE = (function () {
   return { decode: decode, mapFlat: mapFlat, cuffRings: cuffRings };
 })();
 
+  var cacheOrder = [];
   function textures(i) {
-    if (cache[i]) return cache[i];
+    if (cache[i]) { var oi = cacheOrder.indexOf(i); if (oi >= 0) cacheOrder.splice(oi, 1); cacheOrder.push(i); return cache[i]; }
     var d = D[i], aniso = gl.capabilities.getMaxAnisotropy();
     var mk = function (cv) { var t = new THREE.CanvasTexture(cv); t.encoding = THREE.sRGBEncoding; t.anisotropy = aniso; return t; };
     var hasS = SPECS[i].layers.some(function (l) { return l.on && l.type === 'sleeves'; });
@@ -1801,6 +1802,9 @@ var TEE = (function () {
     var ps = d.plane(), tsh = null;
     if (ps) { tsh = mk(paintTexture('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + SHB.w + ' ' + SHB.h + '"><g transform="translate(' + (-SHB.x) + ' ' + (-SHB.y) + ')">' + ps + '</g></svg>', null, window.__LIVE ? 3 : 6, 0, 0, SHB)); tsh.premultiplyAlpha = true; }
     cache[i] = { mir: SPECS[i].layers.some(function (l) { return l.on && /^shut/.test(l.type) && l.mi; }), pan: !!hp, h3: h3 ? window.__H3C.slice() : null, oF: ovw(st.front), oB: ovw(st.back), f: tf, b: tb, fB: tfB, bB: tbB, sh: tsh };
+    /* keep only the newest few designs' textures: every design adds several huge canvases, and a phone runs out of memory (the tab crashes) after a few */
+    cacheOrder.push(i);
+    while (cacheOrder.length > 3) { var old = cacheOrder.shift(); if (old !== i && old !== cur && cache[old]) { disposeCache(old); delete cache[old]; } }
     return cache[i];
   }
   function applyDesign() {
