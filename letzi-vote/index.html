@@ -2201,11 +2201,11 @@ var TEE = (function () {
   /* the panel is built once per design; later updates only change text and attributes, so a tap is never lost to a rebuild */
   var curName = '', FORM = 'https://docs.google.com/forms/d/e/1FAIpQLSeLNXwzqfGpfa0tGoAxWLxLM6cVnGyA5xUgzpmXO9je2UZ_lA/viewform?usp=pp_url&entry.599897637=';
   function formHref() { return FORM + encodeURIComponent(curName || curId) + '&entry.218251075=' + encodeURIComponent(window.__ROUND || ''); }
-  var fv = {}, ft = {}, sending = false, loadedFor = '', rated = {}, autoV = {}, autoT = {};
+  var fv = {}, ft = {}, sending = false, loadedFor = '', rated = {}, autoV = {}, autoT = {}, loadState = 'idle';
   /* values filled from the sheet (not typed or picked by hand) are dropped when the name changes */
   function clearLoaded() {
     Object.keys(autoV).forEach(function (k) { if (autoV[k]) delete fv[k]; }); Object.keys(autoT).forEach(function (k) { if (autoT[k]) delete ft[k]; });
-    autoV = {}; autoT = {}; rated = {}; loadedFor = '';
+    autoV = {}; autoT = {}; rated = {}; loadedFor = ''; loadState = 'idle';
   }
   function ratedNote() {
     if (!els.hist) return;
@@ -2215,11 +2215,12 @@ var TEE = (function () {
   function loadMine() {
     var nm = els.fname ? els.fname.value.trim() : '';
     if (!window.__ENDPOINT || !/^\S+(\s+\S+)+$/.test(nm) || loadedFor === nm.toLowerCase()) return;
-    clearLoaded(); loadedFor = nm.toLowerCase();
+    clearLoaded(); loadedFor = nm.toLowerCase(); loadState = 'loading'; setLinks();
     fetch(window.__ENDPOINT + '?token=' + encodeURIComponent(window.__TOKEN) + '&round=' + encodeURIComponent(window.__ROUND) + '&name=' + encodeURIComponent(nm))
       .then(function (r) { return r.json(); })
       .then(function (j) {
-        if (!j.ok || loadedFor !== (els.fname.value.trim().toLowerCase())) return;
+        if (loadedFor !== nm.toLowerCase()) return;
+        if (!j.ok) throw new Error(j.error);
         rated = {};
         (window.__DESIGNS || []).forEach(function (d) {
           var v = j.votes[d[1]]; if (!v) return;
@@ -2227,9 +2228,9 @@ var TEE = (function () {
           if (fv[d[0]] === undefined || autoV[d[0]]) { fv[d[0]] = v.score; autoV[d[0]] = true; }
           if (!ft[d[0]] || autoT[d[0]]) { ft[d[0]] = v.comment; autoT[d[0]] = true; }
         });
-        setLinks(); ratedNote();
+        loadState = 'ok'; setLinks(); ratedNote();
       })
-      .catch(function () { loadedFor = ''; });
+      .catch(function () { if (loadedFor === nm.toLowerCase()) { loadedFor = ''; loadState = 'fail'; setLinks(); } });
   }
   var loadTimer = 0;
   function setLinks() {
@@ -2240,6 +2241,11 @@ var TEE = (function () {
     var nm = els.fname ? els.fname.value.trim() : '';
     var full = /^\S+(\s+\S+)+$/.test(nm), ok = full && v; els.fgo.style.opacity = ok ? '' : '.5';
     if (!ok) { els.fgo.removeAttribute('href'); els.fgo.textContent = !nm ? 'Enter your name to continue' : !full ? 'Add your last name to continue' : 'Pick a score to continue'; return; }
+    if (window.__ENDPOINT && loadState !== 'ok') {
+      els.fgo.style.opacity = '.5'; els.fgo.setAttribute('href', '#');
+      els.fgo.textContent = loadState === 'fail' ? 'Could not load your earlier votes, tap to retry' : 'Loading your earlier votes...';
+      return;
+    }
     els.fgo.textContent = sending ? 'Sending...' : 'Submit rating';
     if (window.__ENDPOINT) { els.fgo.setAttribute('href', '#'); return; }
     els.fgo.href = formHref().replace('/viewform?usp=pp_url', '/formResponse?submit=Submit') + '&entry.89668179=' + encodeURIComponent(nm) + (v ? '&entry.1046531290=' + v : '') + (t ? '&entry.1295692948=' + encodeURIComponent(t) : '');
@@ -2269,7 +2275,9 @@ var TEE = (function () {
       els.fgo.addEventListener('click', function (e) {
         if (!els.fgo.getAttribute('href')) { e.preventDefault(); return; }
         if (!window.__ENDPOINT) return;
-        e.preventDefault(); if (sending) return;
+        e.preventDefault();
+        if (loadState === 'fail') { loadMine(); return; }
+        if (sending || loadState !== 'ok') return;
         var id = curId, nm = els.fname.value.trim();
         sending = true; els.note.textContent = ''; setLinks();
         fetch(window.__ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ token: window.__TOKEN, round: window.__ROUND, design: curName || id, name: nm, score: fv[id], comment: ft[id] || '' }) })
