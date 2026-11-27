@@ -2207,7 +2207,7 @@ var TEE = (function () {
   /* the panel is built once per design; later updates only change text and attributes, so a tap is never lost to a rebuild */
   var curName = '', FORM = 'https://docs.google.com/forms/d/e/1FAIpQLSeLNXwzqfGpfa0tGoAxWLxLM6cVnGyA5xUgzpmXO9je2UZ_lA/viewform?usp=pp_url&entry.599897637=';
   function formHref() { return FORM + encodeURIComponent(curName || curId) + '&entry.218251075=' + encodeURIComponent(window.__ROUND || ''); }
-  var fv = {}, ft = {}, sending = false, loadedFor = '', rated = {}, autoV = {}, autoT = {}, loadState = 'idle';
+  var fv = {}, ft = {}, dirtyS = {}, saveErr = '', retryT = 0, sending = false, loadedFor = '', rated = {}, autoV = {}, autoT = {}, loadState = 'idle';
   /* values filled from the sheet (not typed or picked by hand) are dropped when the name changes */
   function clearLoaded() {
     Object.keys(autoV).forEach(function (k) { if (autoV[k]) delete fv[k]; }); Object.keys(autoT).forEach(function (k) { if (autoT[k]) delete ft[k]; });
@@ -2216,7 +2216,7 @@ var TEE = (function () {
   function ratedNote() {
     if (!els.hist) return;
     var n = Object.keys(rated).length, tot = (window.__DESIGNS || []).length;
-    els.hist.textContent = n ? 'Rated ' + n + ' of ' + tot + ' designs so far.' + (rated[curId] ? ' Your earlier rating of this design is loaded; submit again to change it.' : '') : '';
+    els.hist.textContent = n ? 'Rated ' + n + ' of ' + tot + ' designs so far.' + (rated[curId] ? ' Your earlier rating of this design is loaded; pick another score to change it.' : '') : '';
   }
   function loadMine() {
     var nm = els.fname ? els.fname.value.trim() : '';
@@ -2234,10 +2234,37 @@ var TEE = (function () {
           if (fv[d[0]] === undefined || autoV[d[0]]) { fv[d[0]] = v.score; autoV[d[0]] = true; }
           if (!ft[d[0]] || autoT[d[0]]) { ft[d[0]] = v.comment; autoT[d[0]] = true; }
         });
-        loadState = 'ok'; setLinks(); ratedNote();
+        loadState = 'ok'; setLinks(); ratedNote(); autoSoon(0);
       })
       .catch(function () { if (loadedFor === nm.toLowerCase()) { loadedFor = ''; loadState = 'fail'; setLinks(); } });
   }
+  /* automatic saving: every picked score and edited comment is sent right away; a later change of the same design overwrites it in the sheet */
+  var autoT2 = 0;
+  function autoSoon(ms) { clearTimeout(autoT2); autoT2 = setTimeout(autoSave, ms); }
+  function autoSave(keep) {
+    if (!window.__ENDPOINT || sending || loadState !== 'ok' || !els.fname) return;
+    var nm = els.fname.value.trim();
+    if (!/^\S+(\s+\S+)+$/.test(nm)) return;
+    var ids = Object.keys(dirtyS).filter(function (k) { return dirtyS[k] && fv[k]; });
+    if (!ids.length) { setLinks(); return; }
+    var id = ids[0], name = (window.__DESIGNS || []).filter(function (d) { return d[0] === id; }).map(function (d) { return d[1]; })[0] || id, score = fv[id], comment = ft[id] || '';
+    dirtyS[id] = false; sending = true; saveErr = ''; setLinks();
+    fetch(window.__ENDPOINT, { method: 'POST', keepalive: !!keep, headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ token: window.__TOKEN, round: window.__ROUND, design: name, name: nm, score: score, comment: comment }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (!j.ok) throw new Error(j.error);
+        sending = false; rated[id] = true;
+        if (!dirtyS[id]) { autoV[id] = true; autoT[id] = true; }
+        ratedNote(); if (els.note) els.note.textContent = 'Saved: ' + name + ' (' + score + '). Change it any time, it is overwritten.';
+        setLinks(); autoSoon(0);
+      })
+      .catch(function (er) {
+        sending = false; dirtyS[id] = true; saveErr = (er && er.message) || 'network';
+        if (els.note) els.note.textContent = 'Not saved yet (' + saveErr + '). Trying again in a few seconds.';
+        setLinks(); clearTimeout(retryT); retryT = setTimeout(function () { saveErr = ''; autoSave(); }, 5000);
+      });
+  }
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') { clearTimeout(autoT2); autoSave(true); } });
   var loadTimer = 0;
   function setLinks() {
     if (!els.fgo) return;
@@ -2252,7 +2279,7 @@ var TEE = (function () {
       els.fgo.textContent = loadState === 'fail' ? 'Could not load your earlier votes, tap to retry' : 'Loading your earlier votes...';
       return;
     }
-    els.fgo.textContent = sending ? 'Sending...' : 'Submit rating';
+    els.fgo.textContent = sending ? 'Saving...' : saveErr ? 'Not saved, tap to retry' : (dirtyS[curId] ? 'Saving...' : (rated[curId] ? 'Saved' : 'Save rating'));
     if (window.__ENDPOINT) { els.fgo.setAttribute('href', '#'); return; }
     els.fgo.href = formHref().replace('/viewform?usp=pp_url', '/formResponse?submit=Submit') + '&entry.89668179=' + encodeURIComponent(nm) + (v ? '&entry.1046531290=' + v : '') + (t ? '&entry.1295692948=' + encodeURIComponent(t) : '');
   }
@@ -2266,15 +2293,16 @@ var TEE = (function () {
     if (built === key) return;
     built = key; fb.textContent = ''; els = {};
     fb.appendChild(el('h4', null, 'Your score'));
-    if (!db) { fb.appendChild(el('p', 'none', 'Enter your first and last name, pick a score and write a comment, then press Submit rating. Your answer is sent to the club.'));
+    if (!db) { fb.appendChild(el('p', 'none', 'Enter your first and last name, pick a score and optionally write a comment. Your answers are saved automatically and can be changed at any time.'));
       els.fname = el('input'); els.fname.type = 'text'; els.fname.placeholder = 'First and last name (required)'; els.fname.maxLength = 60; els.fname.required = true; els.fname.setAttribute('aria-label', 'Your name'); els.fname.value = store.get('bcl-name') || '';
       els.fname.addEventListener('input', function () { store.set('bcl-name', els.fname.value); if (els.fname.value.trim().toLowerCase() !== loadedFor) { clearLoaded(); ratedNote(); } setLinks(); clearTimeout(loadTimer); loadTimer = setTimeout(loadMine, 700); });
       els.fname.addEventListener('blur', loadMine);
       fb.appendChild(els.fname);
       var sc0 = el('div', 'scale'); els.links = [];
-      for (var j = 1; j <= 10; j++) (function (v) { var q = el('button', null, String(v)); q.type = 'button'; q.addEventListener('click', function () { fv[curId] = v; autoV[curId] = false; setLinks(); }); els.links.push(q); sc0.appendChild(q); })(j);
+      for (var j = 1; j <= 10; j++) (function (v) { var q = el('button', null, String(v)); q.type = 'button'; q.addEventListener('click', function () { fv[curId] = v; autoV[curId] = false; dirtyS[curId] = true; setLinks(); autoSoon(0); }); els.links.push(q); sc0.appendChild(q); })(j);
       fb.appendChild(sc0);
-      els.ftext = el('textarea'); els.ftext.placeholder = 'Comment (optional)'; els.ftext.maxLength = 600; els.ftext.addEventListener('input', function () { ft[curId] = els.ftext.value; autoT[curId] = false; setLinks(); });
+      els.ftext = el('textarea'); els.ftext.placeholder = 'Comment (optional)'; els.ftext.maxLength = 600; els.ftext.addEventListener('input', function () { ft[curId] = els.ftext.value; autoT[curId] = false; if (fv[curId]) dirtyS[curId] = true; setLinks(); autoSoon(1200); });
+      els.ftext.addEventListener('blur', function () { autoSoon(0); });
       fb.appendChild(els.ftext);
       els.fgo = el('a', 'post', 'Submit rating'); if (!window.__ENDPOINT) { els.fgo.target = '_blank'; els.fgo.rel = 'noopener'; }
       els.fgo.style.display = 'block'; els.fgo.style.textAlign = 'center'; els.fgo.style.textDecoration = 'none'; els.fgo.style.padding = '12px 14px';
@@ -2283,13 +2311,8 @@ var TEE = (function () {
         if (!window.__ENDPOINT) return;
         e.preventDefault();
         if (loadState === 'fail') { loadMine(); return; }
-        if (sending || loadState !== 'ok') return;
-        var id = curId, nm = els.fname.value.trim();
-        sending = true; els.note.textContent = ''; setLinks();
-        fetch(window.__ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ token: window.__TOKEN, round: window.__ROUND, design: curName || id, name: nm, score: fv[id], comment: ft[id] || '' }) })
-          .then(function (r) { return r.json(); })
-          .then(function (j) { if (!j.ok) throw new Error(j.error); sending = false; rated[id] = true; autoV[id] = true; autoT[id] = true; ratedNote(); els.note.textContent = 'Thanks, your rating for ' + (curName || id) + ' is saved. Pick another design to rate more.'; setLinks(); })
-          .catch(function (er) { sending = false; els.note.textContent = 'Could not save (' + ((er && er.message) || 'network') + '). Please try again.'; setLinks(); });
+        if (fv[curId]) dirtyS[curId] = true;
+        saveErr = ''; autoSoon(0);
       });
       fb.appendChild(els.fgo);
       els.note = el('small', null, window.__ENDPOINT ? '' : 'Submitting opens a confirmation page from Google. Close that tab to come back.'); els.note.setAttribute('role', 'status'); fb.appendChild(els.note);
